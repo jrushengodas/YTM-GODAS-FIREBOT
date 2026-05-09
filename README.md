@@ -160,51 +160,6 @@ V3 supports multiple YouTube API Keys :
 
 # ⚡ Quick Installation
 
-## 1️⃣ Install YouTube Music Desktop
-
-Enable :
-
-```text
-Settings → Integrations → Companion Server
-```
-
-Default port :
-
-```text
-26538
-```
-
----
-
-## 2️⃣ Create YouTube API Keys
-
-Create 1 to 3 API Keys from :
-
-```text
-Google Cloud Console
-```
-
-Enable :
-
-```text
-YouTube Data API v3
-```
-
----
-
-## 3️⃣ Import scripts into Firebot
-
-Copy all `.js` scripts into :
-
-```text
-Firebot/v5/profiles/Main/scripts/
-```
-
----
-
-## 4️⃣ Run setup script
-
-Launch :
 
 ```text
 godas_setup.js
