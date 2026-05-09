@@ -1,0 +1,9 @@
+{
+    "youtubeApiKeys": [
+        "AIzaSyC4sT1PZACFI9Yv8PvShIex2J7FS3f4TOU",
+        "AIzaSyDRttmfHXOyKXxSvYCxnqY6OgemPBOrrTA",
+        "AIzaSyDOZTvcsOKyk4pTs3rglAaE0sGN4JjRkaU"
+    ],
+    "ytmHost": "127.0.0.1",
+    "ytmPort": "26538"
+}
