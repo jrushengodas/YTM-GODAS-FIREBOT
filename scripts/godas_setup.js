@@ -221,7 +221,7 @@ p{
 <div class="card">
 
 <img class="logo"
-src="https://raw.githubusercontent.com/jrushengodas/ytm-godas/main/assets/logo.jpg">
+src="https://raw.githubusercontent.com/jrushengodas/YTM-GODAS-FIREBOT/main/assets/logo.jpg">
 
 <div class="badge">GODAS YTM V3</div>
 
