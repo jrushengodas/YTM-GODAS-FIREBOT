@@ -7,7 +7,7 @@ exports.getScriptManifest = () => ({
     name: "GODAS YTM V3 Setup",
     description: "Setup YTM Godas V3 pour Firebot",
     author: "Godas DEV",
-    version: "2.1.0",
+    version: "3.1.0",
     firebotVersion: "5"
 });
 
