@@ -1,8 +1,8 @@
 exports.getScriptManifest = () => ({
-    name: "GODAS YTM V3 - Playlist",
-    description: "Affiche la playlist SR",
+    name: "GODAS YTM V3.1 - Playlist",
+    description: "Affiche la playlist SR V3.1",
     author: "Godas DEV",
-    version: "1.0.0",
+    version: "3.1.0",
     firebotVersion: "5"
 });
 
@@ -15,47 +15,82 @@ exports.run = async (runRequest) => {
     try {
         let queue = await getQueue(vars);
 
-        if (queue.length === 0) {
-            await setVar(vars, "ytm_sr_last_message_godas", "🎵 Aucune SR active.");
-            return true;
-        }
+        const waitingVideoId = (await getVar(vars, "ytm_sr_waiting_videoid_godas")) || "";
+        const currentTitle = (await getVar(vars, "ytm_current_song_title_godas")) || "";
+        const currentUser = (await getVar(vars, "ytm_current_song_user_godas")) || "";
 
         queue = sortPriorityFirst(queue);
 
-        let message = "🎶 Playlist SR : ";
+        const displayed = [];
+        const lines = [];
 
-        const max = Math.min(queue.length, 5);
+        if (currentTitle) {
+            lines.push(`▶ ${currentTitle}${currentUser ? ` — ${currentUser}` : ""}`);
+        }
 
-        for (let i = 0; i < max; i++) {
-            const song = queue[i];
+        if (waitingVideoId) {
+            const waitingSong = queue.find(s => s && s.videoId === waitingVideoId);
 
-            const title = song.title || "Titre inconnu";
-            const user = song.user || "inconnu";
-            const duration = song.durationText || "??:??";
-            const priority = isPriority(song) ? "⚡ " : "";
+            if (waitingSong) {
+                displayed.push(waitingVideoId);
 
-            message += `#${i + 1} ${priority}${title} (${duration}) par ${user}`;
+                const title = waitingSong.title || "Musique inconnue";
+                const user = waitingSong.user || "inconnu";
+                const duration = waitingSong.durationText || "??:??";
+                const priority = isPriority(waitingSong) ? "[PRIO] " : "";
 
-            if (i < max - 1) {
-                message += " | ";
+                lines.push(`⏳ ${priority}${title} (${duration}) — ${user}`);
             }
         }
 
-        if (queue.length > 5) {
-            message += " | +" + (queue.length - 5) + " autre(s) musique(s)";
+        let count = 0;
+
+        for (const song of queue) {
+            if (!song || !song.videoId) continue;
+
+            if (displayed.includes(song.videoId)) continue;
+
+            const title = song.title || "Musique inconnue";
+            const user = song.user || "inconnu";
+            const duration = song.durationText || "??:??";
+            const priority = isPriority(song) ? "[PRIO] " : "";
+
+            lines.push(`${count + 1}. ${priority}${title} (${duration}) — ${user}`);
+
+            displayed.push(song.videoId);
+
+            count++;
+
+            if (count >= 4) break;
+        }
+
+        if (lines.length === 0) {
+            await setVar(vars, "ytm_sr_last_message_godas", "Aucune SR active.");
+            return true;
+        }
+
+        const remaining =
+            queue.filter(s => s && s.videoId && !displayed.includes(s.videoId)).length;
+
+        let message = "Playlist SR : " + lines.join(" | ");
+
+        if (remaining > 0) {
+            message += ` | +${remaining} autre(s)`;
         }
 
         await setVar(vars, "ytm_sr_last_message_godas", message);
 
+        logger.info("PLAYLIST V3.1 | " + message);
+
         return true;
 
     } catch (err) {
-        logger.error("Erreur playlist SR : " + err.stack);
+        logger.error("PLAYLIST V3.1 ERROR : " + err.stack);
 
         await setVar(
             runRequest.modules.customVariableManager,
             "ytm_sr_last_message_godas",
-            "❌ Erreur affichage playlist SR."
+            "Erreur affichage playlist SR."
         );
 
         return false;
