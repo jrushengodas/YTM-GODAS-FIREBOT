@@ -5,7 +5,7 @@ exports.getScriptManifest = () => ({
     name: "GODAS YTM V3 - Clear",
     description: "Vide la queue YTM + variables SR",
     author: "Godas DEV",
-    version: "1.0.0",
+    version: "3.1.0",
     firebotVersion: "5"
 });
 
