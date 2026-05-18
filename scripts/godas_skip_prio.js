@@ -6,7 +6,7 @@ exports.getScriptManifest = () => ({
     name: "GODAS YTM V3 - Skip Prio",
     description: "Skip prio avec SR prioritaire",
     author: "Godas DEV",
-    version: "1.0.1",
+    version: "3.1.0",
     firebotVersion: "5"
 });
 
