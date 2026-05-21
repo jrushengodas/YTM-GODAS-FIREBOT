@@ -4,8 +4,8 @@ const path = require("path");
 const { exec } = require("child_process");
 
 exports.getScriptManifest = () => ({
-    name: "GODAS YTM V3 Setup",
-    description: "Setup YTM Godas V3 pour Firebot",
+    name: "GODAS YTM V3.1 - Setup",
+    description: "Setup YTM Godas V3.1 pour Firebot",
     author: "Godas DEV",
     version: "3.1.0",
     firebotVersion: "5"
@@ -51,13 +51,13 @@ exports.run = async (runRequest) => {
     const parameters = runRequest.parameters || {};
 
     try {
-        logger.info("🔥 GODAS SETUP SCRIPT LANCÉ 🔥");
+        logger.info("GODAS SETUP V3.1 | Script lancé");
 
-        const youtubeApiKey1 = (parameters.youtubeApiKey1 || "").trim();
-        const youtubeApiKey2 = (parameters.youtubeApiKey2 || "").trim();
-        const youtubeApiKey3 = (parameters.youtubeApiKey3 || "").trim();
+        const youtubeApiKey1 = (parameters.youtubeApiKey1 || "").toString().trim();
+        const youtubeApiKey2 = (parameters.youtubeApiKey2 || "").toString().trim();
+        const youtubeApiKey3 = (parameters.youtubeApiKey3 || "").toString().trim();
 
-        const ytmHost = (parameters.ytmHost || "127.0.0.1").trim();
+        const ytmHost = (parameters.ytmHost || "127.0.0.1").toString().trim();
         const ytmPort = (parameters.ytmPort || "26538").toString().trim();
 
         const youtubeApiKeys = [
@@ -73,27 +73,19 @@ exports.run = async (runRequest) => {
                 "❌ Setup incomplet : ajoute au moins une clé API YouTube."
             );
 
-            logger.error("❌ Aucune clé API YouTube renseignée.");
+            logger.error("GODAS SETUP V3.1 | Aucune clé API YouTube renseignée.");
 
             return {
                 success: false
             };
         }
 
-        const configPath = path.join(
-            process.env.APPDATA,
-            "Firebot",
-            "v5",
-            "profiles",
-            "Main",
-            "scripts",
-            "godas_ytm_config.json"
-        );
+        const configPath = path.join(__dirname, "godas_ytm_config.json");
 
         const config = {
-            youtubeApiKeys: youtubeApiKeys,
-            ytmHost: ytmHost,
-            ytmPort: ytmPort
+            youtubeApiKeys,
+            ytmHost,
+            ytmPort
         };
 
         fs.writeFileSync(
@@ -102,15 +94,19 @@ exports.run = async (runRequest) => {
             "utf8"
         );
 
+        await initVars(vars);
+
         await setVar(
             vars,
             "ytm_sr_last_message_godas",
             `✅ GODAS YTM configuré avec succès ! ${youtubeApiKeys.length} clé(s) API sauvegardée(s).`
         );
 
-        logger.info("✅ CONFIG SAUVEGARDÉE");
-        logger.info("🔑 Clés API sauvegardées : " + youtubeApiKeys.length);
-        logger.info("📁 " + configPath);
+        logger.info("GODAS SETUP V3.1 | Config sauvegardée");
+        logger.info("GODAS SETUP V3.1 | Clés API sauvegardées : " + youtubeApiKeys.length);
+        logger.info("GODAS SETUP V3.1 | Config path : " + configPath);
+        logger.info("GODAS SETUP V3.1 | Host : " + ytmHost);
+        logger.info("GODAS SETUP V3.1 | Port : " + ytmPort);
 
         openSuccessPage(ytmHost, ytmPort, youtubeApiKeys.length, logger);
 
@@ -119,7 +115,7 @@ exports.run = async (runRequest) => {
         };
 
     } catch (err) {
-        logger.error("❌ ERREUR SETUP : " + err.stack);
+        logger.error("GODAS SETUP V3.1 | ERREUR : " + err.stack);
 
         try {
             await setVar(
@@ -134,6 +130,43 @@ exports.run = async (runRequest) => {
         };
     }
 };
+
+async function initVars(vars) {
+    await setVar(vars, "ytm_sr_queue_godas", "[]");
+    await setVar(vars, "ytm_sr_history_godas", "[]");
+    await setVar(vars, "ytm_sr_played_history_godas", "[]");
+
+    await setVar(vars, "ytm_sr_cache_godas", "{}");
+
+    await setVar(vars, "ytm_sr_added_count_godas", "0");
+
+    await setVar(vars, "ytm_sr_active_videoid_godas", "");
+    await setVar(vars, "ytm_sr_waiting_videoid_godas", "");
+    await setVar(vars, "ytm_sr_waiting_since_godas", "");
+    await setVar(vars, "ytm_sr_waiting_retry_godas", "");
+    await setVar(vars, "ytm_sr_waiting_priority_godas", "");
+
+    await setVar(vars, "ytm_sr_stuck_videoid_godas", "");
+    await setVar(vars, "ytm_sr_stuck_since_godas", "");
+
+    await setVar(vars, "ytm_sr_last_launch_ticks_godas", "");
+    await setVar(vars, "ytm_sr_last_requeue_current_godas", "");
+    await setVar(vars, "ytm_sr_last_current_videoid_godas", "");
+
+    await setVar(vars, "ytm_current_song_title_godas", "");
+    await setVar(vars, "ytm_current_song_user_godas", "");
+    await setVar(vars, "ytm_current_song_url_godas", "");
+
+    await setVar(vars, "ytm_nowplaying_title_godas", "");
+    await setVar(vars, "ytm_nowplaying_artist_godas", "");
+    await setVar(vars, "ytm_nowplaying_videoid_godas", "");
+    await setVar(vars, "ytm_nowplaying_url_godas", "");
+
+    await setVar(vars, "ytm_watcher_last_videoid_godas", "");
+    await setVar(vars, "ytm_watcher_last_title_godas", "");
+
+    await setVar(vars, "ytm_sr_lock_godas", "false");
+}
 
 async function setVar(vars, name, value) {
     if (!vars) return;
@@ -155,15 +188,14 @@ function openSuccessPage(host, port, apiKeyCount, logger) {
 <html>
 <head>
 <meta charset="UTF-8">
-<title>GODAS YTM V3</title>
+<title>GODAS YTM V3.1</title>
 
 <style>
-
 body{
     margin:0;
     background:#111827;
     color:white;
-    font-family:Arial;
+    font-family:Arial, sans-serif;
     display:flex;
     align-items:center;
     justify-content:center;
@@ -211,19 +243,16 @@ p{
     height:1px;
     background:rgba(255,255,255,.1);
 }
-
 </style>
-
 </head>
 
 <body>
-
 <div class="card">
 
 <img class="logo"
 src="https://raw.githubusercontent.com/jrushengodas/YTM-GODAS-FIREBOT/main/assets/logo.jpg">
 
-<div class="badge">GODAS YTM V3</div>
+<div class="badge">GODAS YTM V3.1</div>
 
 <h1>✅ Setup réussi</h1>
 
@@ -232,12 +261,12 @@ src="https://raw.githubusercontent.com/jrushengodas/YTM-GODAS-FIREBOT/main/asset
 <div class="line"></div>
 
 <p>${apiKeyCount} clé(s) API YouTube sauvegardée(s)</p>
+<p>Variables Firebot initialisées</p>
 <p>Queue locale prête</p>
-<p>Watcher V3 prêt</p>
+<p>Watcher V3.1 prêt</p>
 <p>Host : ${host} • Port : ${port}</p>
 
 </div>
-
 </body>
 </html>
 `;
@@ -255,11 +284,19 @@ src="https://raw.githubusercontent.com/jrushengodas/YTM-GODAS-FIREBOT/main/asset
         }, 1000);
     });
 
+    server.on("error", (err) => {
+        logger.info("GODAS SETUP V3.1 | Page setup impossible : " + err.message);
+    });
+
     server.listen(setupPort, "127.0.0.1", () => {
         const url = `http://127.0.0.1:${setupPort}/`;
 
-        logger.info("🌐 OUVERTURE PAGE SETUP : " + url);
+        logger.info("GODAS SETUP V3.1 | Ouverture page setup : " + url);
 
-        exec(`start "" "${url}"`);
+        try {
+            exec(`start "" "${url}"`);
+        } catch (err) {
+            logger.info("GODAS SETUP V3.1 | Ouverture navigateur impossible : " + err.message);
+        }
     });
 }
