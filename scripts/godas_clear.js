@@ -2,8 +2,8 @@ const fs = require("fs");
 const path = require("path");
 
 exports.getScriptManifest = () => ({
-    name: "GODAS YTM V3 - Clear",
-    description: "Vide la queue YTM + variables SR",
+    name: "GODAS YTM V3.1 - Clear",
+    description: "Vide la queue YTM + reset les variables SR",
     author: "Godas DEV",
     version: "3.1.0",
     firebotVersion: "5"
@@ -23,11 +23,13 @@ exports.run = async (runRequest) => {
         await clearYTMQueue(host, port, logger);
         await clearVars(vars);
 
-        await setVar(vars, "ytm_sr_last_message_godas", "🧹 Clear effectué.");
+        await setVar(vars, "ytm_sr_last_message_godas", "🧹 Clear effectué. Veuillez attendre 6secs avant de SR");
+
+        logger.info("CLEAR V3.1 | Clear terminé.");
 
         return true;
     } catch (err) {
-        logger.error("Erreur clear V3 : " + err.stack);
+        logger.error("CLEAR V3.1 ERROR : " + err.stack);
 
         await setVar(
             runRequest.modules.customVariableManager,
@@ -55,17 +57,22 @@ async function clearYTMQueue(host, port, logger) {
     const base = `http://${host}:${port}`;
 
     if (await tryDelete(`${base}/api/v1/queue`, logger)) {
-        logger.info("CLEAR V3 | Queue YTM vidée via DELETE /api/v1/queue");
-        return;
+        logger.info("CLEAR V3.1 | Queue YTM vidée via DELETE /api/v1/queue");
+    } else {
+        for (let i = 0; i < 100; i++) {
+            const deleted = await tryDelete(`${base}/api/v1/queue/1`, logger);
+
+            if (!deleted) break;
+        }
+
+        logger.info("CLEAR V3.1 | Queue YTM vidée via fallback /queue/1");
     }
 
-    for (let i = 0; i < 100; i++) {
-        const deleted = await tryDelete(`${base}/api/v1/queue/1`, logger);
+    await tryPost(`${base}/api/v1/next`, logger);
+    await sleep(250);
+    await tryPost(`${base}/api/v1/pause`, logger);
 
-        if (!deleted) break;
-    }
-
-    logger.info("CLEAR V3 | Queue YTM vidée via fallback /queue/1");
+    logger.info("CLEAR V3.1 | Player YTM next + pause envoyé.");
 }
 
 async function tryDelete(url, logger) {
@@ -77,9 +84,38 @@ async function tryDelete(url, logger) {
             }
         });
 
-        return response.ok;
+        if (!response.ok) {
+            logger.info("CLEAR V3.1 | DELETE FAIL : " + url + " | HTTP " + response.status);
+            return false;
+        }
+
+        logger.info("CLEAR V3.1 | DELETE OK : " + url);
+        return true;
     } catch (err) {
-        logger.info("DELETE fail : " + url + " | " + err.message);
+        logger.info("CLEAR V3.1 | DELETE ERROR : " + url + " | " + err.message);
+        return false;
+    }
+}
+
+async function tryPost(url, logger) {
+    try {
+        const response = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: "{}"
+        });
+
+        if (!response.ok) {
+            logger.info("CLEAR V3.1 | POST FAIL : " + url + " | HTTP " + response.status);
+            return false;
+        }
+
+        logger.info("CLEAR V3.1 | POST OK : " + url);
+        return true;
+    } catch (err) {
+        logger.info("CLEAR V3.1 | POST ERROR : " + url + " | " + err.message);
         return false;
     }
 }
@@ -92,15 +128,29 @@ async function clearVars(vars) {
 
     await setVar(vars, "ytm_sr_active_videoid_godas", "");
     await setVar(vars, "ytm_sr_waiting_videoid_godas", "");
+    await setVar(vars, "ytm_sr_waiting_since_godas", "");
+    await setVar(vars, "ytm_sr_waiting_retry_godas", "");
+    await setVar(vars, "ytm_sr_waiting_priority_godas", "");
+
+    await setVar(vars, "ytm_sr_stuck_videoid_godas", "");
+    await setVar(vars, "ytm_sr_stuck_since_godas", "");
+
     await setVar(vars, "ytm_sr_last_launch_ticks_godas", "");
+    await setVar(vars, "ytm_sr_last_requeue_current_godas", "");
+    await setVar(vars, "ytm_sr_last_current_videoid_godas", "");
 
     await setVar(vars, "ytm_current_song_title_godas", "");
     await setVar(vars, "ytm_current_song_user_godas", "");
     await setVar(vars, "ytm_current_song_url_godas", "");
 
+    await setVar(vars, "ytm_nowplaying_title_godas", "");
+    await setVar(vars, "ytm_nowplaying_artist_godas", "");
+    await setVar(vars, "ytm_nowplaying_videoid_godas", "");
+    await setVar(vars, "ytm_nowplaying_url_godas", "");
+
     await setVar(vars, "ytm_watcher_last_videoid_godas", "");
     await setVar(vars, "ytm_watcher_last_title_godas", "");
-    await setVar(vars, "ytm_sr_waiting_priority_godas", "");
+
     await setVar(vars, "ytm_sr_lock_godas", "false");
 }
 
@@ -115,4 +165,8 @@ async function setVar(vars, name, value) {
     if (typeof vars.addCustomVariable === "function") {
         await vars.addCustomVariable(name, value);
     }
+}
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
