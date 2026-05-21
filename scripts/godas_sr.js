@@ -26,7 +26,7 @@ exports.run = async (runRequest) => {
     const vars = runRequest.modules.customVariableManager;
 
     try {
-        logger.info("🎵 GODAS SR V3.1 SCRIPT LANCÉ");
+        logger.info("SR V3.1 | SCRIPT LANCÉ");
 
         const config = loadConfig();
         const apiKeys = getApiKeys(config);
@@ -35,10 +35,15 @@ exports.run = async (runRequest) => {
         const inputRaw = getInput(runRequest, logger);
         const input = (inputRaw || "").trim();
 
-        logger.info("CONFIG API KEYS = " + apiKeys.length);
+        logger.info("SR V3.1 | API KEYS COUNT = " + apiKeys.length);
 
         if (!input) {
             await setVar(vars, "ytm_sr_last_message_godas", `🎵 ${user}, utilise : !sr nom de musique ou lien YouTube`);
+            return true;
+        }
+
+        if (isYoutubeShortUrl(input)) {
+            await setVar(vars, "ytm_sr_last_message_godas", `❌ ${user}, les YouTube Shorts sont refusés pour les SR.`);
             return true;
         }
 
@@ -60,7 +65,7 @@ exports.run = async (runRequest) => {
         let source = isDirectLink ? "link" : "search";
 
         if (cached) {
-            videoId = cached.videoId;
+            videoId = cached.videoId || "";
             title = cached.title || "Titre inconnu";
             durationSeconds = parseInt(cached.durationSeconds || 0, 10) || 0;
 
@@ -70,11 +75,11 @@ exports.run = async (runRequest) => {
                 const bestResult = await searchBestMusic(apiKeys, input, logger);
 
                 if (!bestResult) {
-                    await setVar(vars, "ytm_sr_last_message_godas", `❌ ${user}, aucune musique trouvée. Essaie avec un lien YouTube.`);
+                    await setVar(vars, "ytm_sr_last_message_godas", `❌ ${user}, aucune musique trouvée. Essaie avec un lien YouTube classique.`);
                     return true;
                 }
 
-                videoId = bestResult.id?.videoId;
+                videoId = bestResult.id?.videoId || "";
             }
 
             if (!videoId) {
@@ -91,6 +96,14 @@ exports.run = async (runRequest) => {
             }
 
             title = videoInfo.snippet?.title || "Titre inconnu";
+            const description = videoInfo.snippet?.description || "";
+
+            if (isShortContent(normalize(title), normalize(description))) {
+                await markCacheInvalid(vars, cacheKey, videoId, "short_refused", logger);
+                await setVar(vars, "ytm_sr_last_message_godas", `❌ ${user}, cette vidéo ressemble à un Short, SR refusée.`);
+                return true;
+            }
+
             durationSeconds = parseYoutubeDurationToSeconds(videoInfo.contentDetails?.duration || "");
 
             if (durationSeconds <= 0) {
@@ -131,10 +144,9 @@ exports.run = async (runRequest) => {
 
         await setVar(vars, "ytm_sr_last_message_godas", `🎶 ${user} a ajouté une SR en attente : ${title}`);
 
-        logger.info("SR V3.1 ajoutée : " + title + " | Position=" + position);
+        logger.info("SR V3.1 | AJOUTÉE : " + title + " | Position=" + position);
 
         return true;
-
     } catch (err) {
         logger.error("Erreur SR V3.1 Firebot : " + err.stack);
 
@@ -275,8 +287,14 @@ function buildSearchVariants(input) {
         normalized + " official audio",
         expanded + " official audio",
 
+        normalized + " audio officiel",
+        expanded + " audio officiel",
+
         normalized + " official video",
         expanded + " official video",
+
+        normalized + " clip officiel",
+        expanded + " clip officiel",
 
         normalized + " topic",
         expanded + " topic",
@@ -403,9 +421,13 @@ async function youtubeRequestWithKeys(apiKeys, buildUrl, logger, label) {
             if (
                 msg.includes("quotaExceeded") ||
                 msg.includes("quota") ||
-                msg.includes("403")
+                msg.includes("403") ||
+                msg.includes("400") ||
+                msg.includes("API_KEY_INVALID") ||
+                msg.includes("API key expired") ||
+                msg.includes("keyInvalid")
             ) {
-                logger.info(`SR V3.1 | Quota clé ${i + 1} dépassé, tentative clé suivante...`);
+                logger.info(`SR V3.1 | Clé ${i + 1} ignorée, tentative clé suivante...`);
                 continue;
             }
 
@@ -466,18 +488,26 @@ function getBestScoredResult(items, input, logger) {
         const channel = normalize(channelRaw);
         const description = normalize(descriptionRaw);
 
+        if (isShortContent(title, description)) {
+            logger.info("SR V3.1 | SHORT REFUSÉ | " + titleRaw + " | " + channelRaw);
+            continue;
+        }
+
         let score = 0;
         let matchedWords = 0;
+        let totalUsefulWords = 0;
 
         for (const word of words) {
             if (word.length <= 1) continue;
+
+            totalUsefulWords++;
 
             if (title.includes(word)) {
                 matchedWords++;
             }
         }
 
-        if (matchedWords === words.length) score += 1000;
+        if (totalUsefulWords > 0 && matchedWords === totalUsefulWords) score += 1000;
         if (matchedWords === 0) score -= 2500;
 
         score += matchedWords * 150;
@@ -496,15 +526,18 @@ function getBestScoredResult(items, input, logger) {
             if (description.includes(word)) score += 10;
         }
 
-        if (title.includes("official audio") || title.includes("audio officiel")) score += 180;
-        if (title.includes("official video") || title.includes("clip officiel")) score += 140;
-        if (channel.includes("official") || channel.includes("officiel") || channel.includes("vevo")) score += 90;
-        if (channel.includes("topic")) score += 160;
-        if (title.includes("lyrics") || title.includes("paroles")) score += 25;
+        if (title.includes("official audio") || title.includes("audio officiel")) score += 350;
+        if (title.includes("official video") || title.includes("clip officiel")) score += 220;
 
-        if (title.includes("#shorts") || description.includes("#shorts") || title.includes("shorts")) {
-            score -= 2500;
+        if (channel.includes("official") || channel.includes("officiel")) score += 180;
+        if (channel.includes("vevo")) score += 350;
+        if (channel.includes("topic")) score += 500;
+
+        if (description.includes("provided to youtube by") || title.includes("provided to youtube by")) {
+            score += 300;
         }
+
+        if (title.includes("lyrics") || title.includes("paroles")) score += 25;
 
         if (
             title.includes("speed up") ||
@@ -517,7 +550,7 @@ function getBestScoredResult(items, input, logger) {
             title.includes("tiktok") ||
             title.includes("tik tok")
         ) {
-            score -= 700;
+            score -= 900;
         }
 
         if (
@@ -528,11 +561,11 @@ function getBestScoredResult(items, input, logger) {
             title.includes("live") ||
             title.includes("concert")
         ) {
-            score -= 250;
+            score -= 300;
         }
 
         if (title.includes("playlist") || title.includes("mix") || title.includes("compilation")) {
-            score -= 500;
+            score -= 600;
         }
 
         for (const word of words) {
@@ -627,6 +660,7 @@ async function addToQueue(vars, videoId, title, user, durationSeconds, cacheKey,
         durationSeconds,
         durationText: formatDuration(durationSeconds),
         priority: false,
+        sentToYTM: false,
         url: "https://music.youtube.com/watch?v=" + videoId,
         cacheKey,
         source,
@@ -698,7 +732,6 @@ async function getFromCache(vars, cacheKey, logger) {
     const item = cache[cacheKey];
 
     if (item.valid === false) return null;
-
     if (!item.videoId || !item.durationSeconds) return null;
 
     logger.info("SR V3.1 | CACHE FOUND | " + cacheKey);
@@ -787,7 +820,6 @@ async function cleanSrCache(vars, logger) {
             item.lastFailAt;
 
         const time = dateStr ? new Date(dateStr).getTime() : now;
-
         const ageDays = (now - time) / (1000 * 60 * 60 * 24);
 
         if (valid && ageDays > CACHE_VALID_DAYS) {
@@ -812,7 +844,6 @@ async function cleanSrCache(vars, logger) {
 
 function buildCacheKey(input, isDirectLink, videoId) {
     if (isDirectLink) return "id:" + videoId;
-
     return "q:" + normalize(input);
 }
 
@@ -842,17 +873,36 @@ function extractYoutubeVideoId(input) {
 
     input = input.trim();
 
-    let match = input.match(/(?:youtube\.com\/watch\?v=|music\.youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/);
+    if (isYoutubeShortUrl(input)) return null;
 
+    let match = input.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
     if (match) return match[1];
 
-    match = input.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
-
+    match = input.match(/youtu\.be\/([a-zA-Z0-9_-]{11})/);
     if (match) return match[1];
 
     if (/^[a-zA-Z0-9_-]{11}$/.test(input)) return input;
 
     return null;
+}
+
+function isYoutubeShortUrl(input) {
+    if (!input) return false;
+
+    return /youtube\.com\/shorts\//i.test(input) ||
+           /youtu\.be\/shorts\//i.test(input);
+}
+
+function isShortContent(title, description) {
+    title = title || "";
+    description = description || "";
+
+    if (title.includes("#shorts") || description.includes("#shorts")) return true;
+    if (title.includes(" shorts ") || description.includes(" shorts ")) return true;
+    if (title.includes("ytshorts") || description.includes("ytshorts")) return true;
+    if (title.includes("shortsfeed") || description.includes("shortsfeed")) return true;
+
+    return false;
 }
 
 function normalize(text) {
@@ -864,7 +914,7 @@ function normalize(text) {
         .replace(/_/g, " ")
         .replace(/'/g, " ")
         .replace(/’/g, " ")
-        .replace(/[()[\].,:;!?&]/g, " ")
+        .replace(/[()[\].,:;!?&/]/g, " ")
         .replace(/\s+/g, " ")
         .trim();
 }
