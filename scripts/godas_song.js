@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 
 exports.getScriptManifest = () => ({
-    name: "GODAS YTM V3 - Song",
+    name: "GODAS YTM V3.1 - Song",
     description: "Affiche la musique actuelle YTM",
     author: "Godas DEV",
     version: "3.1.0",
@@ -21,32 +21,20 @@ exports.run = async (runRequest) => {
         const host = config?.ytmHost || "127.0.0.1";
         const port = config?.ytmPort || "26538";
 
-        const body = await httpGetText(`http://${host}:${port}/api/v1/song`);
+        const song = await getCurrentSong(host, port);
 
-        if (!body || body.trim() === "") {
+        if (!song) {
             await setVar(vars, "ytm_sr_last_message_godas", "🎵 Aucune musique actuellement détectée.");
             return true;
         }
 
-        const song = JSON.parse(body);
+        const title = getCurrentTitle(song);
+        const artist = getCurrentArtist(song);
+        const videoId = getCurrentVideoId(song);
 
-        const title =
-            song.title ||
-            song.name ||
-            song.song ||
-            "";
-
-        const artist =
-            song.artist ||
-            song.author ||
-            song.channel ||
-            "";
-
-        const videoId =
-            song.videoId ||
-            song.videoID ||
-            song.id ||
-            "";
+        logger.info(
+            `SONG V3.1 | title=${title} | artist=${artist} | videoId=${videoId}`
+        );
 
         if (!title) {
             await setVar(vars, "ytm_sr_last_message_godas", "🎵 Aucune musique actuellement détectée.");
@@ -59,6 +47,8 @@ exports.run = async (runRequest) => {
 
         if (videoId) {
             await setVar(vars, "ytm_nowplaying_url_godas", "https://music.youtube.com/watch?v=" + videoId);
+        } else {
+            await setVar(vars, "ytm_nowplaying_url_godas", "");
         }
 
         const music = artist ? `${artist} - ${title}` : title;
@@ -111,6 +101,26 @@ function loadConfig() {
     }
 }
 
+async function getCurrentSong(host, port) {
+    const endpoints = [
+        "/api/v1/song",
+        "/api/v1/current-song",
+        "/api/v1/player"
+    ];
+
+    for (const endpoint of endpoints) {
+        try {
+            const body = await httpGetText(`http://${host}:${port}${endpoint}`);
+
+            if (body && body.trim() !== "") {
+                return JSON.parse(body);
+            }
+        } catch {}
+    }
+
+    return null;
+}
+
 function httpGetText(url) {
     return fetch(url).then(async (response) => {
         const body = await response.text();
@@ -121,6 +131,89 @@ function httpGetText(url) {
 
         return body;
     });
+}
+
+function getCurrentTitle(json) {
+    const paths = [
+        ["title"],
+        ["name"],
+        ["song"],
+        ["song", "title"],
+        ["track", "title"],
+        ["video", "title"],
+        ["player", "title"],
+        ["media", "title"]
+    ];
+
+    for (const path of paths) {
+        const value = getNested(json, path);
+
+        if (value) return value.toString();
+    }
+
+    return "";
+}
+
+function getCurrentArtist(json) {
+    const paths = [
+        ["artist"],
+        ["author"],
+        ["channel"],
+        ["song", "artist"],
+        ["song", "author"],
+        ["track", "artist"],
+        ["track", "author"],
+        ["video", "artist"],
+        ["video", "author"],
+        ["player", "artist"],
+        ["media", "artist"]
+    ];
+
+    for (const path of paths) {
+        const value = getNested(json, path);
+
+        if (value) return value.toString();
+    }
+
+    return "";
+}
+
+function getCurrentVideoId(json) {
+    const paths = [
+        ["videoId"],
+        ["videoID"],
+        ["id"],
+        ["song", "videoId"],
+        ["song", "id"],
+        ["track", "videoId"],
+        ["track", "id"],
+        ["video", "videoId"],
+        ["video", "id"],
+        ["player", "videoId"],
+        ["media", "videoId"]
+    ];
+
+    for (const path of paths) {
+        const value = getNested(json, path);
+
+        if (value) return value.toString();
+    }
+
+    return "";
+}
+
+function getNested(obj, path) {
+    let current = obj;
+
+    for (const key of path) {
+        if (!current || current[key] === undefined || current[key] === null) {
+            return "";
+        }
+
+        current = current[key];
+    }
+
+    return current;
 }
 
 async function getVar(vars, name) {
