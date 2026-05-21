@@ -27,7 +27,7 @@
 
 - Song Request via `!sr`
 - Priority SR system
-- Local intelligent queue system
+- Smart local queue system
 - YouTube / YouTube Music links support
 - Search by title + artist
 - Multi YouTube API Keys support
@@ -38,6 +38,10 @@
 - Auto skip protection
 - Playlist sync system
 - Dynamic SR reinjection
+- Anti duplicate queue system
+- Anti Shorts protection
+- Smart ghost song detection
+- Local queue priority sync
 - Current / next song commands
 - Playlist viewer
 - Full queue cleaner
@@ -62,6 +66,9 @@ New protections :
 ✅ Better YTM Desktop compatibility
 ✅ Invalid cache protection
 ✅ Retry logic improvements
+✅ Anti duplicate queue system
+✅ Smart ghost song detection
+✅ Anti Shorts protection
 ```
 
 ---
@@ -76,11 +83,13 @@ The system automatically analyzes :
 ✅ Official versions
 ✅ Official audio
 ✅ VEVO / official channels
+✅ YouTube Music links
 ```
 
 Automatically avoids :
 
 ```text
+❌ YouTube Shorts
 ❌ sped up
 ❌ slowed
 ❌ remix
@@ -89,6 +98,7 @@ Automatically avoids :
 ❌ karaoke
 ❌ reactions
 ❌ playlists
+❌ TikTok edits
 ```
 
 ---
@@ -102,6 +112,8 @@ Complete evolution of the old V3 architecture :
 ❌ No broken fake current
 ❌ No frozen SR
 ❌ No dead playlist transitions
+❌ No duplicate insertions
+❌ No ghost songs
 ```
 
 New architecture :
@@ -114,6 +126,7 @@ New architecture :
 ✅ Better retry system
 ✅ Automatic recovery
 ✅ Firebot optimized
+✅ Stable queue handling
 ```
 
 ---
@@ -140,7 +153,6 @@ YouTube Music Desktop
 !sr music          → Add a song
 !song              → Current song
 !next              → Next YTM song
-!nextsr            → Next local SR
 !playlist          → Show SR queue
 !skip              → Skip current song
 !prio music        → Priority SR
@@ -159,6 +171,8 @@ YouTube Music Desktop
 ✅ Auto skip impossible songs
 ✅ Protects against frozen SR
 ✅ Queue synchronization system
+✅ Anti duplicate insertion
+✅ Smart stuck detection
 ```
 
 ---
@@ -200,11 +214,31 @@ Supports multiple YouTube API Keys :
 
 # Quick Installation
 
+## 1. Install YouTube Music Desktop
+
+Enable :
+
+```text
+Settings → Integrations → Companion Server
+```
+
+Default port :
+
+```text
+26538
+```
+
 ---
 
-# Setup
+## 2. Import Scripts Into Firebot
 
-Run :
+Place all `.js` files inside your Firebot scripts folder.
+
+---
+
+## 3. Run Setup
+
+Execute :
 
 ```text
 godas_setup.js
@@ -218,6 +252,16 @@ Fill :
 - API Key 3
 - Host
 - Port
+```
+
+---
+
+## 4. Start The Watcher
+
+Recommended :
+
+```text
+Every 5 seconds
 ```
 
 ---
@@ -241,16 +285,17 @@ Check :
 
 ```text
 scripts/
+├── godas_clear.js
+├── godas_next.js
+├── godas_playlist.js
+├── godas_prio.js
 ├── godas_setup.js
-├── godas_sr.js
-├── godas_watcher.js
 ├── godas_skip.js
 ├── godas_skip_prio.js
 ├── godas_song.js
-├── godas_next.js
-├── godas_nextsr.js
-├── godas_playlist.js
-├── godas_clear.js
+├── godas_sr.js
+├── godas_watcher.js
+├── godas_ytm_config.json
 ```
 
 ---
