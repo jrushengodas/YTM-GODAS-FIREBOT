@@ -1,9 +1,0 @@
-{
-    "youtubeApiKeys": [
-        "API_KEY_1",
-        "API_KEY_2",
-        "API_KEY_3"
-    ],
-    "ytmHost": "127.0.0.1",
-    "ytmPort": "26538"
-}
