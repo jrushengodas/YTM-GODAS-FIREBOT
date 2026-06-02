@@ -3,9 +3,9 @@ const path = require("path");
 
 exports.getScriptManifest = () => ({
     name: "GODAS YTM V3.1 - Watcher",
-    description: "Queue locale ordre maître + une SR à la fois",
+    description: "Watcher YTM GODAS V3.1 stable",
     author: "Godas DEV",
-    version: "3.1.4",
+    version: "3.1.0",
     firebotVersion: "5"
 });
 
@@ -16,15 +16,19 @@ const ACTIVE_KEY = "ytm_sr_active_videoid_godas";
 const LOCK_KEY = "ytm_sr_lock_godas";
 
 const SENT_KEY = "ytm_sr_sent_videoid_godas";
-const SENT_SINCE_KEY = "ytm_sr_sent_since_godas";
+const SENT_SINCE_KEY = "ytm_sr_sent_since_ticks_godas";
 
 const STUCK_VIDEO_KEY = "ytm_sr_stuck_videoid_godas";
 const STUCK_SINCE_KEY = "ytm_sr_stuck_since_godas";
+
 const LAST_LAUNCH_KEY = "ytm_sr_last_launch_ticks_godas";
 
+const HARD_CLEAR_KEY = "ytm_sr_hard_clear_godas";
+
 const STUCK_TIMEOUT_MS = 10000;
-const SENT_TIMEOUT_MS = 240000;
 const COOLDOWN_MS = 2000;
+const SENT_TIMEOUT_MS = 240000;
+const SENT_NEVER_CURRENT_MS = 15000;
 
 exports.run = async (runRequest) => {
     const logger = runRequest.modules.logger;
@@ -35,7 +39,24 @@ exports.run = async (runRequest) => {
         const host = config?.ytmHost || "127.0.0.1";
         const port = config?.ytmPort || "26538";
 
-        if (((await getVar(vars, LOCK_KEY)) || "false") === "true") {
+        if ((await getVar(vars, HARD_CLEAR_KEY)) === "true") {
+            logger.info("WATCHER V3.1 | HARD CLEAR détecté.");
+
+            await clearOldWaitingVars(vars);
+            await clearSentState(vars);
+
+            await setVar(vars, ACTIVE_KEY, "");
+            await setVar(vars, QUEUE_KEY, "[]");
+            await setVar(vars, STUCK_VIDEO_KEY, "");
+            await setVar(vars, STUCK_SINCE_KEY, "");
+            await setVar(vars, HARD_CLEAR_KEY, "false");
+
+            return true;
+        }
+
+        const lockState = (await getVar(vars, LOCK_KEY)) || "false";
+
+        if (lockState === "true") {
             logger.info("WATCHER V3.1 | Lock actif.");
             return true;
         }
@@ -48,15 +69,22 @@ exports.run = async (runRequest) => {
 
         let queue = await getQueue(vars, logger);
         let sentVideoId = (await getVar(vars, SENT_KEY)) || "";
+        const sentAge = await sentAgeMs(vars);
 
-        logger.info(`WATCHER V3.1 | Current=${currentVideoId} | elapsed=${elapsed} | paused=${paused} | Sent=${sentVideoId} | Queue=${queue.length}`);
+        logger.info(
+            `WATCHER V3.1 | Current=${currentVideoId} | elapsed=${elapsed} | paused=${paused} | Sent=${sentVideoId} | SentAge=${Math.round(sentAge / 1000)} | Queue=${queue.length}`
+        );
 
-        // Si la SR envoyée devient vraiment current, on la retire enfin de la queue locale
+        if (currentVideoId) {
+            await setVar(vars, ACTIVE_KEY, currentVideoId);
+            await setCurrentFromYtm(vars, currentSong);
+        }
+
         if (sentVideoId && currentVideoId === sentVideoId && elapsed > 1) {
             queue = removeSongFromQueue(queue, sentVideoId);
             await setVar(vars, QUEUE_KEY, JSON.stringify(queue));
-            await setVar(vars, SENT_KEY, "");
-            await setVar(vars, SENT_SINCE_KEY, "");
+
+            await clearSentState(vars);
             await setVar(vars, ACTIVE_KEY, sentVideoId);
 
             logger.info("WATCHER V3.1 | SR jouée, retirée de la queue locale : " + sentVideoId);
@@ -64,107 +92,204 @@ exports.run = async (runRequest) => {
             sentVideoId = "";
         }
 
-        if (currentVideoId && elapsed > 1) {
-            await setCurrentFromYtm(vars, currentSong);
-        }
-
-        const playerFrozen = currentVideoId && elapsed <= 1 && duration > 0 && !paused;
+        const playerFrozen =
+            currentVideoId &&
+            elapsed <= 1 &&
+            duration > 0 &&
+            !paused;
 
         if (playerFrozen) {
             if (!(await stuckTimedOut(vars, currentVideoId))) {
-                logger.info("WATCHER V3.1 | Musique à 0:00, attente avant déblocage.");
-            } else {
-                logger.info("WATCHER V3.1 | Musique bloquée à 0:00, tentative déblocage : " + currentVideoId);
-                await trySkipPlayer(host, port, logger);
-                await setVar(vars, STUCK_VIDEO_KEY, "");
-                await setVar(vars, STUCK_SINCE_KEY, "");
+                logger.info("WATCHER V3.1 | Musique à 0:00, attente avant traitement.");
+                return true;
             }
+
+            logger.info("WATCHER V3.1 | Musique bloquée/morte à 0:00 : " + currentVideoId);
+
+            if (sentVideoId) {
+                const age = await sentAgeMs(vars);
+
+                if (currentVideoId === sentVideoId || age >= SENT_NEVER_CURRENT_MS) {
+                    logger.info("WATCHER V3.1 | SR morte détectée, préparation suivante AVANT skip : " + sentVideoId);
+
+                    queue = removeSongFromQueue(queue, sentVideoId);
+                    await setVar(vars, QUEUE_KEY, JSON.stringify(queue));
+
+                    await clearSentState(vars);
+                    await setVar(vars, STUCK_VIDEO_KEY, "");
+                    await setVar(vars, STUCK_SINCE_KEY, "");
+
+                    return await sendNextSongImmediately(vars, host, port, logger);
+                }
+
+                logger.info("WATCHER V3.1 | Current bloqué mais SR envoyée récente, attente : " + sentVideoId);
+                return true;
+            }
+
+            logger.info("WATCHER V3.1 | Current playlist bloqué, skip simple.");
+            await trySkipPlayer(host, port, logger);
+
+            await setVar(vars, STUCK_VIDEO_KEY, "");
+            await setVar(vars, STUCK_SINCE_KEY, "");
+
+            return true;
         }
 
         if (!queue || queue.length === 0) {
             return true;
         }
 
-        // Une SR est déjà envoyée à YTM : elle attend qu'elle passe current avant d'envoyer la suivante
-if (sentVideoId) {
-    if (await sentTimedOut(vars)) {
-        logger.info("WATCHER V3.1 | SR envoyée trop longtemps, on garde la queue mais on ne réinjecte pas : " + sentVideoId);
-        return true;
-    } else {
-        logger.info("WATCHER V3.1 | SR déjà envoyée en attente : " + sentVideoId);
-        return true;
-    }
-}
+        if (sentVideoId) {
+            const age = await sentAgeMs(vars);
+
+            if (age >= SENT_TIMEOUT_MS) {
+                logger.info("WATCHER V3.1 | SR envoyée trop longtemps, suppression queue locale : " + sentVideoId);
+
+                queue = removeSongFromQueue(queue, sentVideoId);
+                await setVar(vars, QUEUE_KEY, JSON.stringify(queue));
+
+                await clearSentState(vars);
+                sentVideoId = "";
+            } else {
+                logger.info("WATCHER V3.1 | SR déjà envoyée en attente : " + sentVideoId);
+                return true;
+            }
+        }
 
         if (!(await cooldownOk(vars))) {
             logger.info("WATCHER V3.1 | Cooldown actif.");
             return true;
         }
 
-        const song = getNextValidSong(queue);
-
-        if (!song || !song.videoId) {
-            queue = removeInvalidSongs(queue);
-            await setVar(vars, QUEUE_KEY, JSON.stringify(queue));
-            return true;
-        }
-
-        const videoId = song.videoId;
-        const title = song.title || "Musique inconnue";
-        const user = song.user || "Viewer";
-
-        const noRealPlayback =
-            !currentVideoId ||
-            elapsed <= 1 ||
-            paused;
-
-        let sent = false;
-
-        if (noRealPlayback) {
-            logger.info("WATCHER V3.1 | Aucun vrai playback, insertion FRONT + wake.");
-
-            sent = await sendToYTMQueue(host, port, videoId, "INSERT_AT_FRONT", logger);
-
-            if (sent) {
-                await tryWakePlayer(host, port, logger);
-            }
-        } else {
-            logger.info("WATCHER V3.1 | Current réel détecté, insertion AFTER_CURRENT.");
-
-            sent = await sendToYTMAfterCurrent(host, port, videoId, logger);
-        }
-
-        if (!sent) {
-            logger.info("WATCHER V3.1 | YTM refuse la SR : " + title);
-
-            queue = removeSongFromQueue(queue, videoId);
-            await setVar(vars, QUEUE_KEY, JSON.stringify(queue));
-            await setVar(vars, "ytm_sr_last_message_godas", `⚠️ SR refusée par YTM : ${title}`);
-
-            return true;
-        }
-
-        // IMPORTANT : on ne retire PAS la SR ici.
-        // Elle reste en queue locale tant qu'elle n'est pas réellement devenue current.
-        await setVar(vars, SENT_KEY, videoId);
-        await setVar(vars, SENT_SINCE_KEY, Date.now().toString());
-        await setVar(vars, LAST_LAUNCH_KEY, Date.now().toString());
-
-        await clearOldWaitingVars(vars);
-
-        await setVar(vars, "ytm_current_song_title_godas", title);
-        await setVar(vars, "ytm_current_song_user_godas", user);
-        await setVar(vars, "ytm_current_song_url_godas", "https://music.youtube.com/watch?v=" + videoId);
-        await setVar(vars, "ytm_sr_last_message_godas", `🎶 SR placée : ${title} demandée par ${user}`);
-
-        logger.info("WATCHER V3.1 | SR envoyée à YTM : " + title);
-
-        return true;
+        return await sendNextSongNormally(vars, host, port, logger, currentVideoId, elapsed, paused);
     } catch (err) {
         logger.error("WATCHER V3.1 ERROR : " + err.stack);
         return false;
     }
 };
+
+async function sendNextSongImmediately(vars, host, port, logger) {
+    let queue = await getQueue(vars, logger);
+
+    if (!queue || queue.length === 0) {
+        logger.info("WATCHER V3.1 | Plus de SR après suppression.");
+        return true;
+    }
+
+    const song = getNextValidSong(queue);
+
+    if (!song || !song.videoId) {
+        queue = removeInvalidSongs(queue);
+        await setVar(vars, QUEUE_KEY, JSON.stringify(queue));
+        return true;
+    }
+
+    const videoId = song.videoId;
+    const title = song.title || "Musique inconnue";
+    const user = song.user || "Viewer";
+
+    logger.info("WATCHER V3.1 | Envoi immédiat SR suivante AVANT skip : " + title);
+
+    const sent = await sendToYTMAfterCurrent(host, port, videoId, logger);
+
+    if (!sent) {
+        logger.info("WATCHER V3.1 | YTM refuse la SR suivante, on garde en queue : " + title);
+        return true;
+    }
+
+    await setVar(vars, SENT_KEY, videoId);
+    await setVar(vars, SENT_SINCE_KEY, Date.now().toString());
+    await setVar(vars, LAST_LAUNCH_KEY, Date.now().toString());
+
+    await setVar(vars, "ytm_current_song_title_godas", title);
+    await setVar(vars, "ytm_current_song_user_godas", user);
+    await setVar(vars, "ytm_current_song_url_godas", "https://music.youtube.com/watch?v=" + videoId);
+
+    await sleep(1200);
+
+    logger.info("WATCHER V3.1 | NEXT après injection SR suivante.");
+    await tryPost(host, port, "/api/v1/next", {}, logger);
+
+    await sleep(900);
+
+    const afterNextSong = await getCurrentSong(host, port);
+    const afterNextId = getCurrentVideoId(afterNextSong);
+
+    logger.info("WATCHER V3.1 | Après NEXT immédiat -> Current=" + afterNextId);
+
+    if (afterNextId !== videoId) {
+        logger.info("WATCHER V3.1 | SR suivante pas encore current, NEXT sécurité.");
+        await tryPost(host, port, "/api/v1/next", {}, logger);
+    }
+
+    await setVar(vars, "ytm_sr_last_message_godas", `🎶 SR placée : ${title} demandée par ${user}`);
+    logger.info("WATCHER V3.1 | SR envoyée à YTM : " + title);
+
+    return true;
+}
+
+async function sendNextSongNormally(vars, host, port, logger, currentVideoId, elapsed, paused) {
+    let queue = await getQueue(vars, logger);
+
+    if (!queue || queue.length === 0) {
+        return true;
+    }
+
+    const song = getNextValidSong(queue);
+
+    if (!song || !song.videoId) {
+        queue = removeInvalidSongs(queue);
+        await setVar(vars, QUEUE_KEY, JSON.stringify(queue));
+        return true;
+    }
+
+    const videoId = song.videoId;
+    const title = song.title || "Musique inconnue";
+    const user = song.user || "Viewer";
+
+    const noRealPlayback =
+        !currentVideoId ||
+        elapsed <= 1 ||
+        paused;
+
+    let sent = false;
+
+    if (noRealPlayback) {
+        logger.info("WATCHER V3.1 | Aucun vrai playback, insertion AFTER_CURRENT.");
+        sent = await sendToYTMAfterCurrent(host, port, videoId, logger);
+
+        if (sent && currentVideoId) {
+            logger.info("WATCHER V3.1 | Current fantôme, attente puis NEXT pour passer à la SR.");
+            await sleep(900);
+            await tryPost(host, port, "/api/v1/next", {}, logger);
+        }
+    } else {
+        logger.info("WATCHER V3.1 | Current réel détecté, insertion AFTER_CURRENT.");
+        sent = await sendToYTMAfterCurrent(host, port, videoId, logger);
+    }
+
+    if (!sent) {
+        logger.info("WATCHER V3.1 | YTM refuse temporairement la SR, on garde en queue : " + title);
+        await clearSentState(vars);
+        return true;
+    }
+
+    await setVar(vars, SENT_KEY, videoId);
+    await setVar(vars, SENT_SINCE_KEY, Date.now().toString());
+    await setVar(vars, LAST_LAUNCH_KEY, Date.now().toString());
+
+    await clearOldWaitingVars(vars);
+
+    await setVar(vars, "ytm_current_song_title_godas", title);
+    await setVar(vars, "ytm_current_song_user_godas", user);
+    await setVar(vars, "ytm_current_song_url_godas", "https://music.youtube.com/watch?v=" + videoId);
+
+    await setVar(vars, "ytm_sr_last_message_godas", `🎶 SR placée : ${title} demandée par ${user}`);
+
+    logger.info("WATCHER V3.1 | SR envoyée à YTM : " + title);
+
+    return true;
+}
 
 function loadConfig() {
     const configPath = path.join(__dirname, "godas_ytm_config.json");
@@ -181,9 +306,29 @@ function loadConfig() {
 async function clearOldWaitingVars(vars) {
     await setVar(vars, "ytm_sr_waiting_videoid_godas", "");
     await setVar(vars, "ytm_sr_waiting_since_godas", "");
+    await setVar(vars, "ytm_sr_waiting_since_ticks_godas", "");
     await setVar(vars, "ytm_sr_waiting_retry_godas", "");
     await setVar(vars, "ytm_sr_last_requeue_current_godas", "");
+    await setVar(vars, "ytm_sr_last_current_while_waiting_godas", "");
     await setVar(vars, "ytm_sr_waiting_priority_godas", "");
+}
+
+async function clearSentState(vars) {
+    await setVar(vars, SENT_KEY, "");
+    await setVar(vars, SENT_SINCE_KEY, "");
+    await setVar(vars, LAST_LAUNCH_KEY, "");
+}
+
+async function sentAgeMs(vars) {
+    const ticks = await getVar(vars, SENT_SINCE_KEY);
+
+    if (!ticks) return 0;
+
+    const parsed = parseInt(ticks, 10);
+
+    if (Number.isNaN(parsed)) return 0;
+
+    return Date.now() - parsed;
 }
 
 async function getVar(vars, name) {
@@ -216,7 +361,7 @@ async function setVar(vars, name, value) {
 }
 
 async function getQueue(vars, logger) {
-    const queue = await getVar(vars, QUEUE_KEY);
+    let queue = await getVar(vars, QUEUE_KEY);
 
     if (Array.isArray(queue)) return queue;
 
@@ -416,24 +561,6 @@ async function cooldownOk(vars) {
     return Date.now() - last >= COOLDOWN_MS;
 }
 
-async function sentTimedOut(vars) {
-    const sinceStr = await getVar(vars, SENT_SINCE_KEY);
-
-    if (!sinceStr) {
-        await setVar(vars, SENT_SINCE_KEY, Date.now().toString());
-        return false;
-    }
-
-    const since = parseInt(sinceStr, 10);
-
-    if (Number.isNaN(since)) {
-        await setVar(vars, SENT_SINCE_KEY, Date.now().toString());
-        return false;
-    }
-
-    return Date.now() - since >= SENT_TIMEOUT_MS;
-}
-
 async function stuckTimedOut(vars, videoId) {
     const stuckVideo = (await getVar(vars, STUCK_VIDEO_KEY)) || "";
     const sinceStr = (await getVar(vars, STUCK_SINCE_KEY)) || "";
@@ -488,56 +615,28 @@ async function sendToYTMQueue(host, port, videoId, insertPosition, logger) {
     }
 }
 
-async function tryWakePlayer(host, port, logger) {
-    const endpoints = [
-        "/api/v1/play",
-        "/api/v1/player/play",
-        "/api/v1/toggle-play"
-    ];
-
-    for (const endpoint of endpoints) {
-        if (await tryPost(host, port, endpoint, {}, logger)) {
-            logger.info("WATCHER V3.1 | Wake player OK : " + endpoint);
-            return true;
-        }
-    }
-
-    logger.info("WATCHER V3.1 | Wake player impossible.");
-    return false;
-}
-
 async function trySkipPlayer(host, port, logger) {
     const beforeSong = await getCurrentSong(host, port);
     const before = getCurrentVideoId(beforeSong);
 
     logger.info("WATCHER V3.1 | Skip demandé | Before=" + before);
 
-    await tryPost(host, port, "/api/v1/next", {}, logger);
+    const ok = await tryPost(host, port, "/api/v1/next", {}, logger);
+
+    if (!ok) {
+        logger.info("WATCHER V3.1 | Skip FAIL endpoint /api/v1/next.");
+        return false;
+    }
+
     await sleep(1200);
 
-    let afterSong = await getCurrentSong(host, port);
-    let after = getCurrentVideoId(afterSong);
+    const afterSong = await getCurrentSong(host, port);
+    const after = getCurrentVideoId(afterSong);
 
     logger.info("WATCHER V3.1 | Après skip -> Current=" + after);
 
     if (after === before) {
-        logger.info("WATCHER V3.1 | Skip bloqué, hard wake player.");
-
-        await tryPost(host, port, "/api/v1/pause", {}, logger);
-        await sleep(500);
-
-        await tryPost(host, port, "/api/v1/play", {}, logger);
-        await sleep(1500);
-
-        afterSong = await getCurrentSong(host, port);
-        after = getCurrentVideoId(afterSong);
-
-        logger.info("WATCHER V3.1 | Après hard wake -> Current=" + after);
-
-        if (after === before) {
-            logger.info("WATCHER V3.1 | Hard wake échoué.");
-            return false;
-        }
+        logger.info("WATCHER V3.1 | Skip OK API mais YTM n'a pas changé de musique.");
     }
 
     return true;
