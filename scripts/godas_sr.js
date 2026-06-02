@@ -15,6 +15,7 @@ exports.getDefaultParameters = () => Promise.resolve({});
 const QUEUE_KEY = "ytm_sr_queue_godas";
 const HISTORY_KEY = "ytm_sr_history_godas";
 const CACHE_KEY = "ytm_sr_cache_godas";
+const SENT_KEY = "ytm_sr_sent_videoid_godas";
 
 const MAX_DURATION_SECONDS = 720;
 const CACHE_VALID_DAYS = 90;
@@ -34,8 +35,6 @@ exports.run = async (runRequest) => {
         const user = getUser(runRequest);
         const inputRaw = getInput(runRequest, logger);
         const input = (inputRaw || "").trim();
-
-        logger.info("SR V3.1 | API KEYS COUNT = " + apiKeys.length);
 
         if (!input) {
             await setVar(vars, "ytm_sr_last_message_godas", `🎵 ${user}, utilise : !sr nom de musique ou lien YouTube`);
@@ -80,6 +79,25 @@ exports.run = async (runRequest) => {
                 }
 
                 videoId = bestResult.id?.videoId || "";
+            } else {
+                const originalInfo = await getVideoInfoWithRetry(apiKeys, videoId, logger);
+
+                if (originalInfo) {
+                    const originalTitle = originalInfo.snippet?.title || "";
+                    const originalChannel = originalInfo.snippet?.channelTitle || "";
+
+                    const searchInput = `${originalTitle} ${originalChannel}`.trim();
+
+                    logger.info("SR LINK REMAP SEARCH | " + searchInput);
+
+                    const bestResult = await searchBestMusic(apiKeys, searchInput, logger);
+
+                    if (bestResult?.id?.videoId) {
+                        logger.info("SR LINK REMAP | " + videoId + " -> " + bestResult.id.videoId);
+                        videoId = bestResult.id.videoId;
+                        source = "link_remap";
+                    }
+                }
             }
 
             if (!videoId) {
@@ -143,7 +161,6 @@ exports.run = async (runRequest) => {
         await addLocalHistory(vars, videoId, title, user, durationSeconds, position, cacheKey, source, input);
 
         await setVar(vars, "ytm_sr_last_message_godas", `🎶 ${user} a ajouté une SR en attente : ${title}`);
-
         logger.info("SR V3.1 | AJOUTÉE : " + title + " | Position=" + position);
 
         return true;
@@ -161,9 +178,7 @@ exports.run = async (runRequest) => {
 function loadConfig() {
     const configPath = path.join(__dirname, "godas_ytm_config.json");
 
-    if (!fs.existsSync(configPath)) {
-        return null;
-    }
+    if (!fs.existsSync(configPath)) return null;
 
     try {
         return JSON.parse(fs.readFileSync(configPath, "utf8"));
@@ -176,14 +191,10 @@ function getApiKeys(config) {
     if (!config) return [];
 
     if (Array.isArray(config.youtubeApiKeys)) {
-        return config.youtubeApiKeys
-            .map(key => key.toString().trim())
-            .filter(key => key !== "");
+        return config.youtubeApiKeys.map(key => key.toString().trim()).filter(key => key !== "");
     }
 
-    if (config.youtubeApiKey) {
-        return [config.youtubeApiKey.toString().trim()];
-    }
+    if (config.youtubeApiKey) return [config.youtubeApiKey.toString().trim()];
 
     return [];
 }
@@ -264,12 +275,12 @@ async function searchBestMusic(apiKeys, input, logger) {
             bestGlobal = result;
         }
 
-        if (score >= 1700) {
+        if (score >= 2800) {
             logger.info("SR V3.1 | STOP EARLY | SCORE PARFAIT");
             return result;
         }
 
-        if (i >= 5 && bestGlobal && bestGlobalScore >= 1100) {
+        if (i >= 10 && bestGlobal && bestGlobalScore >= 1900) {
             logger.info("SR V3.1 | STOP EARLY | SCORE SOLIDE");
             return bestGlobal;
         }
@@ -279,41 +290,66 @@ async function searchBestMusic(apiKeys, input, logger) {
 }
 
 function buildSearchVariants(input) {
-    const clean = input.trim();
-    const normalized = clean.replace(/\s+/g, " ");
+    const normalized = input.trim().replace(/\s+/g, " ");
     const expanded = expandJoinedWords(normalized);
 
-    const variants = [
-        normalized + " official audio",
-        expanded + " official audio",
+    const variants = [];
 
-        normalized + " audio officiel",
-        expanded + " audio officiel",
+    const deMatch = normalized.match(/^(.*?)\s+de\s+(.+)$/i);
 
-        normalized + " official video",
-        expanded + " official video",
+    if (deMatch) {
+        const deTitle = deMatch[1].trim();
+        const deArtist = deMatch[2].trim();
 
-        normalized + " clip officiel",
-        expanded + " clip officiel",
+        addPairVariants(variants, deArtist, deTitle);
+        addPairVariants(variants, deTitle, deArtist);
+    }
 
-        normalized + " topic",
-        expanded + " topic",
+    const parts = normalized.split(/\s+/).filter(Boolean);
 
-        normalized + " audio",
-        expanded + " audio",
+    if (parts.length >= 2) {
+        for (let cut = 1; cut < parts.length; cut++) {
+            const left = parts.slice(0, cut).join(" ");
+            const right = parts.slice(cut).join(" ");
 
-        normalized + " music",
-        expanded + " music",
+            addPairVariants(variants, left, right);
+            addPairVariants(variants, right, left);
+        }
+    }
 
-        normalized,
-        expanded
-    ];
+    variants.push(normalized + " official audio");
+    variants.push(expanded + " official audio");
+    variants.push(normalized + " audio officiel");
+    variants.push(expanded + " audio officiel");
+    variants.push(normalized + " official video");
+    variants.push(expanded + " official video");
+    variants.push(normalized + " clip officiel");
+    variants.push(expanded + " clip officiel");
+    variants.push(normalized + " topic");
+    variants.push(expanded + " topic");
+    variants.push(normalized + " youtube music");
+    variants.push(expanded + " youtube music");
+    variants.push(normalized + " provided to youtube");
+    variants.push(expanded + " provided to youtube");
+    variants.push(normalized);
+    variants.push(expanded);
 
-    return [...new Set(
-        variants
-            .map(v => v.trim())
-            .filter(v => v !== "")
-    )];
+    return [...new Set(variants.map(v => v.trim()).filter(Boolean))];
+}
+
+function addPairVariants(variants, a, b) {
+    if (!a || !b) return;
+
+    a = a.trim();
+    b = b.trim();
+
+    variants.push(a + " " + b);
+    variants.push(a + " - " + b);
+    variants.push(a + " topic " + b);
+    variants.push(a + " " + b + " topic");
+    variants.push(a + " " + b + " youtube music");
+    variants.push(a + " " + b + " official audio");
+    variants.push(a + " " + b + " provided to youtube");
 }
 
 function expandJoinedWords(input) {
@@ -420,12 +456,14 @@ async function youtubeRequestWithKeys(apiKeys, buildUrl, logger, label) {
 
             if (
                 msg.includes("quotaExceeded") ||
+                msg.includes("dailyLimitExceeded") ||
                 msg.includes("quota") ||
                 msg.includes("403") ||
                 msg.includes("400") ||
                 msg.includes("API_KEY_INVALID") ||
                 msg.includes("API key expired") ||
-                msg.includes("keyInvalid")
+                msg.includes("keyInvalid") ||
+                msg.includes("accessNotConfigured")
             ) {
                 logger.info(`SR V3.1 | Clé ${i + 1} ignorée, tentative clé suivante...`);
                 continue;
@@ -474,9 +512,6 @@ function getBestScoredResult(items, input, logger) {
     const cleanInput = normalize(input);
     const words = cleanInput.split(" ").filter(Boolean);
 
-    const wantedArtist = (words[0] || "").toLowerCase();
-    const wantedTitle = words.slice(1).join(" ").trim();
-
     let best = null;
     let bestScore = -999999;
 
@@ -491,10 +526,7 @@ function getBestScoredResult(items, input, logger) {
         const channel = normalize(channelRaw);
         const description = normalize(descriptionRaw);
 
-        if (isShortContent(title, description)) {
-            logger.info("SR V3.1 | SHORT REFUSÉ | " + titleRaw + " | " + channelRaw);
-            continue;
-        }
+        if (isShortContent(title, description)) continue;
 
         let score = 0;
         let matchedWords = 0;
@@ -505,65 +537,54 @@ function getBestScoredResult(items, input, logger) {
 
             totalUsefulWords++;
 
-            if (title.includes(word) || channel.includes(word)) {
+            if (
+                title.includes(word) ||
+                channel.includes(word) ||
+                isCloseWordInText(word, title) ||
+                isCloseWordInText(word, channel)
+            ) {
                 matchedWords++;
             }
         }
 
-        if (totalUsefulWords > 0 && matchedWords === totalUsefulWords) score += 1000;
-        if (matchedWords === 0) score -= 2500;
+        if (totalUsefulWords > 0 && matchedWords === totalUsefulWords) score += 1600;
+        if (matchedWords === 0) score -= 2200;
 
-        score += matchedWords * 150;
+        score += matchedWords * 180;
 
-        if (title.includes(cleanInput)) score += 700;
+        if (title.includes(cleanInput)) score += 900;
+        if (channel.includes(cleanInput)) score += 600;
 
         if (title.startsWith(cleanInput) || cleanInput.startsWith(title)) {
             score += 800;
         }
 
-        // BONUS ARTISTE PRINCIPAL
-        if (wantedArtist && channel.includes(wantedArtist)) {
-            score += 1600;
-        }
+        for (let cut = 1; cut < words.length; cut++) {
+            const left = words.slice(0, cut).join(" ");
+            const right = words.slice(cut).join(" ");
 
-        if (wantedArtist && title.includes(wantedArtist)) {
-            score += 700;
-        }
-
-        // Si le titre correspond mais PAS l’artiste demandé, grosse pénalité
-        if (
-            wantedArtist &&
-            wantedTitle &&
-            title.includes(wantedTitle) &&
-            !title.includes(wantedArtist) &&
-            !channel.includes(wantedArtist)
-        ) {
-            score -= 1400;
+            if (containsClosePhrase(title, left) && containsClosePhrase(channel, right)) score += 3200;
+            if (containsClosePhrase(title, right) && containsClosePhrase(channel, left)) score += 3200;
+            if (containsClosePhrase(title, left) && containsClosePhrase(title, right)) score += 1800;
         }
 
         for (const word of words) {
             if (word.length <= 1) continue;
 
-            if (title.includes(word)) score += 90;
-            if (channel.includes(word)) score += 120;
+            if (title.includes(word)) score += 110;
+            if (channel.includes(word)) score += 140;
             if (description.includes(word)) score += 10;
+
+            if (isCloseWordInText(word, title)) score += 80;
+            if (isCloseWordInText(word, channel)) score += 120;
         }
 
         if (title.includes("official audio") || title.includes("audio officiel")) score += 350;
         if (title.includes("official video") || title.includes("clip officiel")) score += 220;
-
         if (channel.includes("official") || channel.includes("officiel")) score += 180;
         if (channel.includes("vevo")) score += 350;
-        if (channel.includes("topic")) score += 500;
-
-        if (wantedArtist && channel.includes(wantedArtist) && channel.includes("topic")) {
-            score += 1000;
-        }
-
-        if (description.includes("provided to youtube by") || title.includes("provided to youtube by")) {
-            score += 300;
-        }
-
+        if (channel.includes("topic")) score += 650;
+        if (description.includes("provided to youtube by") || title.includes("provided to youtube by")) score += 300;
         if (title.includes("lyrics") || title.includes("paroles")) score += 25;
 
         if (
@@ -577,7 +598,7 @@ function getBestScoredResult(items, input, logger) {
             title.includes("tiktok") ||
             title.includes("tik tok")
         ) {
-            score -= 900;
+            score -= 700;
         }
 
         if (
@@ -598,8 +619,13 @@ function getBestScoredResult(items, input, logger) {
         for (const word of words) {
             if (word.length <= 2) continue;
 
-            if (!title.includes(word) && !channel.includes(word)) {
-                score -= 250;
+            if (
+                !title.includes(word) &&
+                !channel.includes(word) &&
+                !isCloseWordInText(word, title) &&
+                !isCloseWordInText(word, channel)
+            ) {
+                score -= 120;
             }
         }
 
@@ -618,12 +644,85 @@ function getBestScoredResult(items, input, logger) {
         logger.info("SR V3.1 | MEILLEUR RESULTAT = " + best.snippet.title + " | Score=" + bestScore);
     }
 
-    if (bestScore < 350) {
-        logger.info("SR V3.1 | Score trop faible, résultat refusé : " + bestScore);
-        return null;
+    if (!best) return null;
+
+    if (bestScore < 150) {
+        logger.info("SR FALLBACK | Score faible mais résultat conservé : " + bestScore);
     }
 
     return best;
+}
+
+function containsClosePhrase(text, phrase) {
+    text = normalize(text);
+    phrase = normalize(phrase);
+
+    if (!text || !phrase) return false;
+    if (text.includes(phrase)) return true;
+
+    const words = phrase.split(" ").filter(Boolean);
+    let ok = 0;
+
+    for (const word of words) {
+        if (word.length <= 1) continue;
+
+        if (text.includes(word) || isCloseWordInText(word, text)) {
+            ok++;
+        }
+    }
+
+    return ok >= Math.max(1, words.length - 1);
+}
+
+function isCloseWordInText(word, text) {
+    if (!word || !text) return false;
+
+    const parts = text.split(" ").filter(Boolean);
+
+    for (const part of parts) {
+        if (isCloseWord(word, part)) return true;
+    }
+
+    return false;
+}
+
+function isCloseWord(a, b) {
+    a = normalize(a);
+    b = normalize(b);
+
+    if (a === b) return true;
+    if (a.length < 4 || b.length < 4) return false;
+
+    const d = levenshtein(a, b);
+    const max = Math.max(a.length, b.length);
+
+    if (max <= 5) return d <= 1;
+    if (max <= 8) return d <= 2;
+
+    return d <= 3;
+}
+
+function levenshtein(s, t) {
+    const n = s.length;
+    const m = t.length;
+    const d = Array.from({ length: n + 1 }, () => Array(m + 1).fill(0));
+
+    for (let i = 0; i <= n; i++) d[i][0] = i;
+    for (let j = 0; j <= m; j++) d[0][j] = j;
+
+    for (let i = 1; i <= n; i++) {
+        for (let j = 1; j <= m; j++) {
+            const cost = s[i - 1] === t[j - 1] ? 0 : 1;
+
+            d[i][j] = Math.min(
+                d[i - 1][j] + 1,
+                d[i][j - 1] + 1,
+                d[i - 1][j - 1] + cost
+            );
+        }
+    }
+
+    return d[n][m];
 }
 
 async function getVar(vars, name) {
@@ -656,6 +755,12 @@ async function setVar(vars, name, value) {
 }
 
 async function alreadyInQueue(vars, videoId) {
+    if (!videoId) return false;
+
+    const sentVideoId = await getVar(vars, SENT_KEY);
+
+    if (sentVideoId && sentVideoId === videoId) return true;
+
     let queue = await getVar(vars, QUEUE_KEY);
 
     if (!Array.isArray(queue)) {
@@ -678,6 +783,10 @@ async function addToQueue(vars, videoId, title, user, durationSeconds, cacheKey,
         } catch {
             queue = [];
         }
+    }
+
+    if (queue.some(song => song && song.videoId === videoId)) {
+        return queue.length;
     }
 
     const song = {
